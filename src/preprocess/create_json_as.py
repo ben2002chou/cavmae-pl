@@ -4,7 +4,7 @@
 # @Affiliation  : Massachusetts Institute of Technology
 # @Email   : yuangong@mit.edu
 # @File    : create_json_as.py
-
+# @Modified: By Ben to transfer datapaths to Grand
 import os
 import json
 
@@ -25,9 +25,11 @@ def clean_json(dataset_json_file):
         for entry in data:
             video_id = entry['video_id']
             wav = entry['wav']
-            video_path = entry['image']
+            wav = '/'.join(wav.split('/')[:-1])
+            wav = '/grand/EVITA/ben/AudioSet/wav'
+            video_path = entry['video_path']
             video_path = '/'.join(video_path.split('/')[:-1])
-            video_path = '/data/sls/audioset/dave_version/image_mulframe/'
+            video_path = '/grand/EVITA/ben/AudioSet/videos'
             labels = entry['labels']
 
             new_entry = {}
@@ -42,4 +44,4 @@ def clean_json(dataset_json_file):
     with open(dataset_json_file[:-5] + '_cleaned.json', 'w') as f:
         json.dump(output, f, indent=1)
 
-clean_json('/data/sls/scratch/yuangong/cav-mae/pretrained_model/datafiles/audioset/audioset_2m.json')
+clean_json('../../data/audioset_20k_cleaned.json')

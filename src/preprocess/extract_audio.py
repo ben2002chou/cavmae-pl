@@ -4,7 +4,7 @@ import argparse
 
 parser = argparse.ArgumentParser(description='Easy video feature extractor')
 parser.add_argument("-input_file_list", type=str, default='sample_video_extract_list.csv', help="Should be a csv file of a single columns, each row is the input video path.")
-parser.add_argument("-target_fold", type=str, default='./sample_audio/', help="The place to store the video frames.")
+parser.add_argument("-target_fold", type=str, default='./sample_audio/', help="The place to store audio.")
 args = parser.parse_args()
 
 input_filelist = np.loadtxt(args.input_file_list, delimiter=',', dtype=str)

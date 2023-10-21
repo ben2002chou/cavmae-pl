@@ -13,8 +13,9 @@
 
 set -x
 # comment this line if not running on sls cluster
-. /data/sls/scratch/share-201907/slstoolchainrc
-source /data/sls/scratch/yuangong/avbyol/venv-a5/bin/activate
+cd /
+# . /data/sls/scratch/share-201907/slstoolchainrc
+# source /data/sls/scratch/yuangong/avbyol/venv-a5/bin/activate
 export TORCH_HOME=../../pretrained_models
 
 model=cav-mae-ft

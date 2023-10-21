@@ -65,7 +65,7 @@ class AudiosetDataset(Dataset):
         :param audio_conf: Dictionary containing the audio loading and preprocessing settings
         :param dataset_json_file
         """
-        self.datapath = dataset_json_file
+        self.datapath = "../egs/audioset/audiset_20k_cleaned.json" # modified
         with open(dataset_json_file, 'r') as fp:
             data_json = json.load(fp)
 

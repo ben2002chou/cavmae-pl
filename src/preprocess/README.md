@@ -25,8 +25,8 @@ python extract_audio.py  -input_file_list sample_video_extract_list.csv -target_
 
 You will need two files:
 
-- A label csv file listing all labels. (see `src/preprocess/sample_datafiles/class_labels_indices_as.csv` as an example).
-- A json file that have four keys for each sample (see `src/preprocess/sample_datafiles/sample_json_as.json` as an example):
+- A label csv file listing all labels. (see `src/preprocess/sample_datafiles/class_labels_indices_as.csv` as an example). ("ben": we got these)
+- A json file that have four keys for each sample (see `src/preprocess/sample_datafiles/sample_json_as.json` as an example):("ben": we need to change the paths for these)
   - `wav`: the absolute path to the audio track extracted in the previous step, e.g., `/data/sls/audioset/--4gqARaEJE.flac`
   - `video_id`: the video_id (i.e., the video filename without extension), e.g., `--4gqARaEJE` for video `--4gqARaEJE.mp4`.
   - `video_path`: the `target_fold` you used in the previous step, e.g., `/data/sls/audioset/`. Our pipeline will load from `video_path/frame_{0-9}/video_id.jpg`, not `video_path/video_id.jpg` So **make sure `video_path/frame_{0-9}/video_id.jpg` contains your image frames.**
