@@ -21,6 +21,8 @@ src/dataloader_old.py
 .idea
 .DS_Store
 /cavmae1017
+/.ipynb_checkpoints
+/exp
 egs/vggsound/run_cavmae_ft_internal.sh
 src/dataloader_audio_only.py
 src/gen_audio_embedding.py
@@ -29,3 +31,5 @@ src/gen_audio_embedding_ltue.py
 src/gen_audio_embedding_esc.py
 egs/audioset/run_cavmae_ft_bal_audioonly_internal.sh
 egs/vggsound/run_cavmae_ft_audioonly_internal.sh
+
+
