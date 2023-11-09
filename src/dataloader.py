@@ -131,7 +131,7 @@ class AudiosetDataset(Dataset):
                 std=[0.2290, 0.2240, 0.2250]
             )])
 
-    # change python list to numpy array to avoid memory leak.
+    # change python list to numpy array to avoid memory leak. pro -> process
     def pro_data(self, data_json):
         for i in range(len(data_json)):
             data_json[i] = [data_json[i]['wav'], data_json[i]['labels'], data_json[i]['video_id'], data_json[i]['video_path']]
@@ -230,6 +230,13 @@ class AudiosetDataset(Dataset):
 
     def __getitem__(self, index):
         if random.random() < self.mixup:
+            """Mixup:
+            If the randomly generated number is less than self.mixup, 
+            the code inside the if statement will be executed. 
+            The higher the value of self.mixup, 
+            the higher the chance that the code 
+            inside the if statement will run. 
+            """
             datum = self.data[index]
             datum = self.decode_data(datum)
             mix_sample_idx = random.randint(0, self.num_samples-1)
