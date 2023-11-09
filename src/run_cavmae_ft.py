@@ -147,6 +147,7 @@ print('Now starting training for {:d} epochs.'.format(args.n_epochs))
 train(audio_model, train_loader, val_loader, args)
 
 # average the model weights of checkpoints, note it is not ensemble, and does not increase computational overhead
+# Wa -> Weight Averaging
 def wa_model(exp_dir, start_epoch, end_epoch):
     sdA = torch.load(exp_dir + '/models/audio_model.' + str(start_epoch) + '.pth', map_location='cpu')
     model_cnt = 1

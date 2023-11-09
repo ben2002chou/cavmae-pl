@@ -200,7 +200,7 @@ class AudiosetDataset(Dataset):
 
         p = target_length - n_frames
 
-        # cut and pad
+        # cut and pad if different length
         if p > 0:
             m = torch.nn.ZeroPad2d((0, 0, 0, p))
             fbank = m(fbank)
