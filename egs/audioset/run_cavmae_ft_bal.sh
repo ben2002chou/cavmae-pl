@@ -9,7 +9,7 @@ source cavmae1017/bin/activate
 # comment this line if not running on sls cluster
 # . /data/sls/scratch/share-201907/slstoolchainrc
 # source /data/sls/scratch/yuangong/avbyol/venv-a5/bin/activate
-export TORCH_HOME=../../pretrained_model
+export TORCH_HOME=/home/ben2002chou/code/cav-mae/pretrained_model
 
 model=cav-mae-ft
 ftmode=multimodal
@@ -44,9 +44,9 @@ batch_size=36
 label_smooth=0.1
 
 dataset=audioset
-tr_data=data/audioset_20k_cleaned.json
-te_data=data/audioset_eval_cleaned.json
-label_csv=data/class_labels_indices.csv
+tr_data=/home/ben2002chou/code/cav-mae/data/audioset_20k_filtered.json
+te_data=/home/ben2002chou/code/cav-mae/data/audioset_eval_filtered.json
+label_csv=/home/ben2002chou/code/cav-mae/data/class_labels_indices.csv
 
 exp_dir=./exp/testmae06-bal-${model}-${lr}-${lrscheduler_start}-${lrscheduler_decay}-${lrscheduler_step}-bs${batch_size}-lda${lr_adapt}-${ftmode}-fz${freeze_base}-h${head_lr}-a5
 mkdir -p $exp_dir

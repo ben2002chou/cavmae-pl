@@ -31,7 +31,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     data_path = args.data_path
 
-    index_dict = make_index_dict('./data/class_labels_indices.csv')
+    index_dict = make_index_dict('/home/ben2002chou/code/cav-mae/data/class_labels_indices.csv')
     label_count = np.zeros(527)
 
     with open(data_path, 'r', encoding='utf8')as fp:

@@ -12,7 +12,7 @@
 import csv
 import json
 import os.path
-
+import logging
 import torchaudio
 import numpy as np
 import torch
@@ -87,7 +87,8 @@ class AudiosetDataset(Dataset):
         # dataset spectrogram mean and std, used to normalize the input
         self.norm_mean = self.audio_conf.get('mean')
         self.norm_std = self.audio_conf.get('std')
-        # skip_norm is a flag that if you want to skip normalization to compute the normalization stats using src/get_norm_stats.py, if Ture, input normalization will be skipped for correctly calculating the stats.
+        # TODO: Find out how they get normalization stats
+        # skip_norm is a flag that if you want to skip normalization to compute the normalization stats using src/get_norm_stats.py, if True, input normalization will be skipped for correctly calculating the stats.
         # set it as True ONLY when you are getting the normalization stats.
         self.skip_norm = self.audio_conf.get('skip_norm') if self.audio_conf.get('skip_norm') else False
         if self.skip_norm:
@@ -167,6 +168,7 @@ class AudiosetDataset(Dataset):
             waveform, sr = torchaudio.load(filename)
             waveform = waveform - waveform.mean()
         # mixup
+        # Me: mixes file 1 and file 2 with mix_lambda
         else:
             waveform1, sr = torchaudio.load(filename)
             waveform2, _ = torchaudio.load(filename2)
@@ -206,7 +208,9 @@ class AudiosetDataset(Dataset):
             fbank = fbank[0:target_length, :]
 
         return fbank
+    
 
+    
     def randselect_img(self, video_id, video_path):
         if self.mode == 'eval':
             # if not specified, use the middle frame

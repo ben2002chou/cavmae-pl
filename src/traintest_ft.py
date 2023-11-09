@@ -61,7 +61,8 @@ def train(audio_model, train_loader, test_loader, args):
     print('Total trainable parameter number is : {:.3f} million'.format(sum(p.numel() for p in trainables) / 1e6))
 
     print('The newly initialized mlp layer uses {:.3f} x larger lr'.format(args.head_lr))
-    optimizer = torch.optim.Adam([{'params': base_params, 'lr': args.lr}, {'params': mlp_params, 'lr': args.lr * args.head_lr}], weight_decay=5e-7, betas=(0.95, 0.999))
+    # Changed optimizer to AdamW
+    optimizer = torch.optim.AdamW([{'params': base_params, 'lr': args.lr}, {'params': mlp_params, 'lr': args.lr * args.head_lr}], weight_decay=5e-7, betas=(0.95, 0.999))
     base_lr = optimizer.param_groups[0]['lr']
     mlp_lr = optimizer.param_groups[1]['lr']
     lr_list = [args.lr, mlp_lr]
@@ -221,7 +222,8 @@ def validate(audio_model, val_loader, args, output_pred=False):
         for i, (a_input, v_input, labels) in enumerate(val_loader):
             a_input = a_input.to(device)
             v_input = v_input.to(device)
-
+            
+            # perform automatic mixed precision (AMP) training
             with autocast():
                 audio_output = audio_model(a_input, v_input, args.ftmode)
 
@@ -232,6 +234,7 @@ def validate(audio_model, val_loader, args, output_pred=False):
 
             labels = labels.to(device)
             loss = args.loss_fn(audio_output, labels)
+            # Me: Where is the loss function defined?
             A_loss.append(loss.to('cpu').detach())
 
             batch_time.update(time.time() - end)
@@ -248,3 +251,4 @@ def validate(audio_model, val_loader, args, output_pred=False):
     else:
         # used for multi-frame evaluation (i.e., ensemble over frames), so return prediction and target
         return stats, audio_output, target
+    

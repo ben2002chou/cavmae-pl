@@ -228,3 +228,5 @@ else:
         print('multi-frame mAP is {:.4f}'.format(mAP))
         res.append(mAP)
     np.savetxt(args.exp_dir + '/mul_frame_res.csv', res, delimiter=',')
+    
+    

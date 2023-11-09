@@ -17,7 +17,10 @@ for i in range(input_filelist.shape[0]):
     ext_len = len(input_f.split('/')[-1].split('.')[-1])
     video_id = input_f.split('/')[-1][:-ext_len-1]
     output_f_1 = args.target_fold + '/' + video_id + '_intermediate.wav'
-    os.system('ffmpeg -i {:s} -vn -ar 16000 {:s}'.format(input_f, output_f_1)) # save an intermediate file
+
+    # Check if the intermediate file already exists before resampling
+    if not os.path.exists(output_f_1):
+        os.system('ffmpeg -i {:s} -vn -ar 16000 {:s}'.format(input_f, output_f_1))  # save an intermediate file
 
 # then extract the first channel
 for i in range(input_filelist.shape[0]):
@@ -26,6 +29,12 @@ for i in range(input_filelist.shape[0]):
     video_id = input_f.split('/')[-1][:-ext_len-1]
     output_f_1 = args.target_fold + '/' + video_id + '_intermediate.wav'
     output_f_2 = args.target_fold + '/' + video_id + '.wav'
-    os.system('sox {:s} {:s} remix 1'.format(output_f_1, output_f_2))
-    # remove the intermediate file
-    os.remove(output_f_1)
+
+    # Check if the final output file already exists before extracting the first channel
+    if not os.path.exists(output_f_2):
+        os.system('sox {:s} {:s} remix 1'.format(output_f_1, output_f_2))
+
+    # It might be wise to also check if the intermediate file exists before attempting to remove it
+    if os.path.exists(output_f_1):
+        os.remove(output_f_1)
+
