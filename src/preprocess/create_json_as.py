@@ -26,11 +26,11 @@ def clean_json(dataset_json_file):
             video_id = entry['video_id']
             wav = entry['wav']
             temp = '/'.join(wav.split('/')[:-1])
-            wav = '/grand/EVITA/ben/AudioSet/eval/audio_samples'
+            wav = '/grand/EVITA/ben/AudioSet/unbalanced/audio_samples'
             wav = os.path.join(wav, video_id + '.wav')
             video_path = entry['video_path']
             video_path = '/'.join(video_path.split('/')[:-1])
-            video_path = '/grand/EVITA/ben/AudioSet/eval/video_frames'
+            video_path = '/grand/EVITA/ben/AudioSet/unbalanced/video_frames'
             labels = entry['labels']
             new_entry = {}
             new_entry['video_id'] = video_id
@@ -44,4 +44,4 @@ def clean_json(dataset_json_file):
     with open(dataset_json_file[:-5] + '_2023.json', 'w') as f:
         json.dump(output, f, indent=1)
 
-clean_json('../../data/audioset_eval_cleaned.json')
+clean_json('../../data/audioset_2m_cleaned.json')

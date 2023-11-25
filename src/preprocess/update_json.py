@@ -2,14 +2,14 @@ import json
 import os
 
 # Load JSON data
-with open('/home/ben2002chou/code/cav-mae/data/audioset_eval_cleaned_2023.json', 'r') as file:
+with open('/home/ben2002chou/code/cav-mae/data/audioset_2m_cleaned_2023.json', 'r') as file:
     data = json.load(file)
 
 # List to hold entries to keep
 filtered_data = []
 
 # Directory to check for video files
-video_directory = '/grand/EVITA/ben/AudioSet/eval/videos'
+video_directory = '/grand/EVITA/ben/AudioSet/unbalanced/videos'
 
 for entry in data['data']:
     video_id = entry['video_id']
@@ -23,5 +23,5 @@ for entry in data['data']:
 data['data'] = filtered_data
 
 # Write the filtered data back to a new JSON file
-with open('/home/ben2002chou/code/cav-mae/data/audioset_eval_filtered.json', 'w') as file:
+with open('/home/ben2002chou/code/cav-mae/data/audioset_2m_filtered.json', 'w') as file:
     json.dump(data, file, indent=4)
