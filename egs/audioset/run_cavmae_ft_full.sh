@@ -14,7 +14,7 @@ set -x
 cd /home/ben2002chou/code/cav-mae
 source cavmae1017/bin/activate
 # source /data/sls/scratch/yuangong/avbyol/venv-a5/bin/activate
-export TORCH_HOME=../../pretrained_models
+export TORCH_HOME=/home/ben2002chou/code/cav-mae/pretrained_model
 
 model=cav-mae-ft
 ftmode=multimodal # or audioonly or videoonly
@@ -43,7 +43,7 @@ target_length=1024
 noise=True
 freqm=48
 timem=192
-mixup=0.5
+mixup=0.5 # Only finetuning uses mixup
 batch_size=48
 label_smooth=0.1
 
@@ -55,7 +55,7 @@ label_csv=/home/ben2002chou/code/cav-mae/data/class_labels_indices.csv
 exp_dir=./exp/testmae01-full-${model}-${lr}-${lrscheduler_start}-${lrscheduler_decay}-${lrscheduler_step}-bs${batch_size}-lda${lr_adapt}-${ftmode}-fz${freeze_base}-h${head_lr}-r3
 mkdir -p $exp_dir
 
-CUDA_CACHE_DISABLE=1 python -W ignore ../../src/run_cavmae_ft.py --model ${model} --dataset ${dataset} \
+CUDA_CACHE_DISABLE=1 python -W ignore src/run_cavmae_ft.py --model ${model} --dataset ${dataset} \
 --data-train ${tr_data} --data-val ${te_data} --exp-dir $exp_dir \
 --label-csv ${label_csv} --n_class 527 \
 --lr $lr --n-epochs ${epoch} --batch-size $batch_size --save_model True \

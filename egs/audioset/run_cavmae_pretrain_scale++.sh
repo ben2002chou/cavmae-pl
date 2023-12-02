@@ -12,9 +12,11 @@
 # run cav-mae pretraining, fits larger GPUs (4*24GB GPUs)
 
 set -x
-. /data/sls/scratch/share-201907/slstoolchainrc
-source /data/sls/scratch/yuangong/avbyol/venv-a5/bin/activate
-export TORCH_HOME=../../pretrained_models
+# . /data/sls/scratch/share-201907/slstoolchainrc
+# source /data/sls/scratch/yuangong/avbyol/venv-a5/bin/activate
+cd /home/ben2002chou/code/cav-mae
+source cavmae1017/bin/activate
+export TORCH_HOME=/home/ben2002chou/code/cav-mae/pretrained_model
 
 model=cav-mae
 masking_ratio=0.75
@@ -44,14 +46,16 @@ batch_size=256
 lr_adapt=False
 
 dataset=audioset
-tr_data=/data/sls/scratch/yuangong/cav-mae/pretrained_model/datafiles/audioset/audioset_2m_cleaned.json
-te_data=/data/sls/scratch/yuangong/cav-mae/pretrained_model/datafiles/audioset/audioset_eval_cleaned.json
-label_csv=/data/sls/scratch/yuangong/convast/egs/audioset/data/class_labels_indices.csv
+tr_data=/home/ben2002chou/code/cav-mae/data/audioset_2m_filtered.json
+te_data=/home/ben2002chou/code/cav-mae/data/audioset_eval_filtered.json
+label_csv=/home/ben2002chou/code/cav-mae/data/class_labels_indices.csv
 
 exp_dir=./exp/testmae01-${dataset}-${model}-bal${bal}-lr${lr}-epoch${epoch}-bs${batch_size}-norm${norm_pix_loss}-c${contrast_loss_weight}-p${mae_loss_weight}-tp${tr_pos}-mr-${mask_mode}-${masking_ratio}-a5
 mkdir -p $exp_dir
 
-CUDA_CACHE_DISABLE=1 python -W ignore ../../src/run_cavmae_pretrain.py --model ${model} --dataset ${dataset} \
+nvidia-smi -l 1 --format=csv --query-gpu=timestamp,name,utilization.gpu,utilization.memory,memory.total,memory.free,memory.used > nvidia_log_${SLURM_JOB_ID}.txt &
+
+CUDA_CACHE_DISABLE=1 python -W ignore src/run_cavmae_pretrain.py --model ${model} --dataset ${dataset} \
 --data-train ${tr_data} --data-val ${te_data} --exp-dir $exp_dir \
 --label-csv ${label_csv} --n_class 527 \
 --lr $lr --n-epochs ${epoch} --batch-size $batch_size --save_model True \
