@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-# @Time    : 3/11/23 4:02 PM
-# @Author  : Yuan Gong
-# @Affiliation  : Massachusetts Institute of Technology
-# @Email   : yuangong@mit.edu
-# @File    : cav_mae.py
+# @Time    : 12/2/24 4:13 PM
+# @Author  : Ben Chou
+# @Affiliation  : Purdue University
+# @Email   : chou150@purdue.edu
+# @File    : cav_mae_with_midi_gen_audio.py
 
 import os
 
@@ -53,7 +53,7 @@ class Block(nn.Module):
     ):
         super().__init__()
         self.norm1 = norm_layer(dim)
-        self.norm1_a = norm_layer(dim)
+        self.norm1_a1 = norm_layer(dim)
         self.norm1_a2 = norm_layer(dim)
         self.norm1_v = norm_layer(dim)
         self.attn = Attention(
@@ -67,7 +67,7 @@ class Block(nn.Module):
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.norm2 = norm_layer(dim)
-        self.norm2_a = norm_layer(dim)
+        self.norm2_a1 = norm_layer(dim)
         self.norm2_a2 = norm_layer(dim)
         self.norm2_v = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
@@ -125,27 +125,27 @@ class CAVMAE(nn.Module):
         timm.models.vision_transformer.PatchEmbed = PatchEmbed
         timm.models.vision_transformer.Block = Block
 
-        self.patch_embed_a = PatchEmbed(img_size, patch_size, 1, embed_dim)
+        self.patch_embed_a1 = PatchEmbed(img_size, patch_size, 1, embed_dim)
         self.patch_embed_a2 = PatchEmbed(img_size, patch_size, 1, embed_dim)
 
         self.patch_embed_v = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
 
-        self.patch_embed_a.num_patches = int(audio_length * 128 / 256)
+        self.patch_embed_a1.num_patches = int(audio_length * 128 / 256)
         self.patch_embed_a2.num_patches = int(audio_length * 128 / 256)
 
         print(
             "Number of Audio Patches: {:d}, MIDI Audio Patches: {:d}, Visual Patches: {:d}".format(
-                self.patch_embed_a.num_patches,
+                self.patch_embed_a1.num_patches,
                 self.patch_embed_a2.num_patches,
                 self.patch_embed_v.num_patches,
             )
         )
 
-        self.modality_a = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.modality_a1 = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.modality_v = nn.Parameter(torch.zeros(1, 1, embed_dim))
 
-        self.pos_embed_a = nn.Parameter(
-            torch.zeros(1, self.patch_embed_a.num_patches, embed_dim),
+        self.pos_embed_a1 = nn.Parameter(
+            torch.zeros(1, self.patch_embed_a1.num_patches, embed_dim),
             requires_grad=tr_pos,
         )  # fixed sin-cos embedding
         self.pos_embed_a2 = nn.Parameter(
@@ -158,7 +158,7 @@ class CAVMAE(nn.Module):
         )  # fixed sin-cos embedding
 
         # audio-branch
-        self.blocks_a = nn.ModuleList(
+        self.blocks_a1 = nn.ModuleList(
             [
                 Block(
                     embed_dim,
@@ -215,7 +215,8 @@ class CAVMAE(nn.Module):
         )
 
         # independent normalization layer for audio, visual, and audio-visual
-        self.norm_a, self.norm_v, self.norm = (
+        self.norm_a1, self.norm_a2, self.norm_v, self.norm = (
+            norm_layer(embed_dim),
             norm_layer(embed_dim),
             norm_layer(embed_dim),
             norm_layer(embed_dim),
@@ -228,11 +229,16 @@ class CAVMAE(nn.Module):
         # token used for masking
         self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
 
-        self.decoder_modality_a = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
+        self.decoder_modality_a1 = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
+        self.decoder_modality_a2 = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
         self.decoder_modality_v = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
 
-        self.decoder_pos_embed_a = nn.Parameter(
-            torch.zeros(1, self.patch_embed_a.num_patches, decoder_embed_dim),
+        self.decoder_pos_embed_a1 = nn.Parameter(
+            torch.zeros(1, self.patch_embed_a1.num_patches, decoder_embed_dim),
+            requires_grad=tr_pos,
+        )  # fixed sin-cos embedding
+        self.decoder_pos_embed_a2 = nn.Parameter(
+            torch.zeros(1, self.patch_embed_a2.num_patches, decoder_embed_dim),
             requires_grad=tr_pos,
         )  # fixed sin-cos embedding
         self.decoder_pos_embed_v = nn.Parameter(
@@ -257,7 +263,10 @@ class CAVMAE(nn.Module):
         self.decoder_norm = norm_layer(decoder_embed_dim)
 
         # project channel is different for two modality, use two projection head
-        self.decoder_pred_a = nn.Linear(
+        self.decoder_pred_a1 = nn.Linear(
+            decoder_embed_dim, patch_size**2 * 1, bias=True
+        )  # decoder to patch
+        self.decoder_pred_a2 = nn.Linear(
             decoder_embed_dim, patch_size**2 * 1, bias=True
         )  # decoder to patch
         self.decoder_pred_v = nn.Linear(
@@ -273,13 +282,25 @@ class CAVMAE(nn.Module):
 
     def initialize_weights(self):
         # initialize (and freeze) pos_embed by sin-cos embedding, opt the cls token, add by myself
-        pos_embed_a = get_2d_sincos_pos_embed(
-            self.pos_embed_a.shape[-1],
+        pos_embed_a1 = get_2d_sincos_pos_embed(
+            self.pos_embed_a1.shape[-1],
             8,
-            int(self.patch_embed_a.num_patches / 8),
+            int(self.patch_embed_a1.num_patches / 8),
             cls_token=False,
         )
-        self.pos_embed_a.data.copy_(torch.from_numpy(pos_embed_a).float().unsqueeze(0))
+        self.pos_embed_a1.data.copy_(
+            torch.from_numpy(pos_embed_a1).float().unsqueeze(0)
+        )
+
+        pos_embed_a2 = get_2d_sincos_pos_embed(
+            self.pos_embed_a2.shape[-1],
+            8,
+            int(self.patch_embed_a2.num_patches / 8),
+            cls_token=False,
+        )
+        self.pos_embed_a2.data.copy_(
+            torch.from_numpy(pos_embed_a2).float().unsqueeze(0)
+        )
 
         pos_embed_v = get_2d_sincos_pos_embed(
             self.pos_embed_v.shape[-1],
@@ -289,14 +310,24 @@ class CAVMAE(nn.Module):
         )
         self.pos_embed_v.data.copy_(torch.from_numpy(pos_embed_v).float().unsqueeze(0))
 
-        decoder_pos_embed_a = get_2d_sincos_pos_embed(
-            self.decoder_pos_embed_a.shape[-1],
+        decoder_pos_embed_a1 = get_2d_sincos_pos_embed(
+            self.decoder_pos_embed_a1.shape[-1],
             8,
-            int(self.patch_embed_a.num_patches / 8),
+            int(self.patch_embed_a1.num_patches / 8),
             cls_token=False,
         )
-        self.decoder_pos_embed_a.data.copy_(
-            torch.from_numpy(decoder_pos_embed_a).float().unsqueeze(0)
+        self.decoder_pos_embed_a1.data.copy_(
+            torch.from_numpy(decoder_pos_embed_a1).float().unsqueeze(0)
+        )
+
+        decoder_pos_embed_a2 = get_2d_sincos_pos_embed(
+            self.decoder_pos_embed_a2.shape[-1],
+            8,
+            int(self.patch_embed_a2.num_patches / 8),
+            cls_token=False,
+        )
+        self.decoder_pos_embed_a2.data.copy_(
+            torch.from_numpy(decoder_pos_embed_a2).float().unsqueeze(0)
         )
 
         decoder_pos_embed_v = get_2d_sincos_pos_embed(
@@ -310,15 +341,19 @@ class CAVMAE(nn.Module):
         )
 
         # initialize patch_embed like nn.Linear (instead of nn.Conv2d)
-        w = self.patch_embed_a.proj.weight.data
+        w = self.patch_embed_a1.proj.weight.data
+        torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+        w = self.patch_embed_a2.proj.weight.data
         torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
         w = self.patch_embed_v.proj.weight.data
         torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
 
         # timm's trunc_normal_(std=.02) is effectively normal_(std=0.02) as cutoff is too big (2.)
-        torch.nn.init.normal_(self.modality_a, std=0.02)
+        torch.nn.init.normal_(self.modality_a1, std=0.02)
+        torch.nn.init.normal_(self.modality_a2, std=0.02)
         torch.nn.init.normal_(self.modality_v, std=0.02)
-        torch.nn.init.normal_(self.decoder_modality_a, std=0.02)
+        torch.nn.init.normal_(self.decoder_modality_a1, std=0.02)
+        torch.nn.init.normal_(self.decoder_modality_a2, std=0.02)
         torch.nn.init.normal_(self.decoder_modality_v, std=0.02)
         torch.nn.init.normal_(self.mask_token, std=0.02)
 
@@ -532,27 +567,34 @@ class CAVMAE(nn.Module):
         )
 
     def forward_decoder(
-        self, x, mask_a, ids_restore_a, mask_a2, ids_restore_a2, mask_v, ids_restore_v
+        self, x, mask_a1, ids_restore_a1, mask_a2, ids_restore_a2, mask_v, ids_restore_v
     ):
         x = self.decoder_embed(x)
 
         # append mask tokens to sequence
         # mask_tokens_a in shape [B, #a_mask_token, mask_token_dim], get the number of masked samples from mask_a[0], which is the first example of the batch, all samples should have same number of masked tokens
-        mask_tokens_a = self.mask_token.repeat(x.shape[0], int(mask_a[0].sum()), 1)
-        a_ = torch.cat(
+        mask_tokens_a1 = self.mask_token.repeat(x.shape[0], int(mask_a1[0].sum()), 1)
+        a1_ = torch.cat(
             [
-                x[:, : self.patch_embed_a.num_patches - int(mask_a[0].sum()), :],
-                mask_tokens_a,
+                x[:, : self.patch_embed_a1.num_patches - int(mask_a1[0].sum()), :],
+                mask_tokens_a1,
             ],
             dim=1,
         )  # no cls token
-        a_ = torch.gather(
-            a_, dim=1, index=ids_restore_a.unsqueeze(-1).repeat(1, 1, x.shape[2])
+        a1_ = torch.gather(
+            a1_, dim=1, index=ids_restore_a1.unsqueeze(-1).repeat(1, 1, x.shape[2])
         )  # unshuffle
         mask_tokens_a2 = self.mask_token.repeat(x.shape[0], int(mask_a2[0].sum()), 1)
         a2_ = torch.cat(
             [
-                x[:, : self.patch_embed_a2.num_patches - int(mask_a2[0].sum()), :],
+                x[
+                    :,
+                    self.patch_embed_a1.num_patches : self.patch_embed_a1.num_patches
+                    + self.patch_embed_a2.num_patches
+                    - int(mask_a1[0].sum())
+                    - int(mask_a2[0].sum()),
+                    :,
+                ],
                 mask_tokens_a2,
             ],
             dim=1,
@@ -564,7 +606,14 @@ class CAVMAE(nn.Module):
         mask_tokens_v = self.mask_token.repeat(x.shape[0], int(mask_v[0].sum()), 1)
         v_ = torch.cat(
             [
-                x[:, self.patch_embed_a.num_patches - int(mask_a[0].sum()) :, :],
+                x[
+                    :,
+                    self.patch_embed_a1.num_patches
+                    + self.patch_embed_a2.num_patches
+                    - int(mask_a1[0].sum())
+                    - int(mask_a2[0].sum()) :,
+                    :,
+                ],
                 mask_tokens_v,
             ],
             dim=1,
@@ -574,7 +623,7 @@ class CAVMAE(nn.Module):
         )  # unshuffle
 
         # concatenate audio and visual tokens
-        x = torch.cat([a_, a2_, v_], dim=1)
+        x = torch.cat([a1_, a2_, v_], dim=1)
 
         decoder_pos_embed = torch.cat(
             [self.decoder_pos_embed_a, self.decoder_pos_embed_v], dim=1
@@ -582,11 +631,26 @@ class CAVMAE(nn.Module):
         x = x + decoder_pos_embed
 
         # add modality indication tokens
-        x[:, 0 : self.patch_embed_a.num_patches, :] = (
-            x[:, 0 : self.patch_embed_a.num_patches, :] + self.decoder_modality_a
+        x[:, 0 : self.patch_embed_a1.num_patches, :] = (
+            x[:, 0 : self.patch_embed_a1.num_patches, :] + self.decoder_modality_a1
         )
-        x[:, self.patch_embed_a.num_patches :, :] = (
-            x[:, self.patch_embed_a.num_patches :, :] + self.decoder_modality_v
+        x[
+            :,
+            self.patch_embed_a1.num_patches : self.patch_embed_a1.num_patches
+            + self.patch_embed_a2.num_patches,
+            :,
+        ] = (
+            x[
+                :,
+                self.patch_embed_a1.num_patches : self.patch_embed_a1.num_patches
+                + self.patch_embed_a2.num_patches,
+                :,
+            ]
+            + self.decoder_modality_a2
+        )
+        x[:, self.patch_embed_a1.num_patches + self.patch_embed_a2.num_patches :, :] = (
+            x[:, self.patch_embed_a1.num_patches + self.patch_embed_a2.num_patches :, :]
+            + self.decoder_modality_v
         )
 
         # apply Transformer blocks
@@ -595,21 +659,21 @@ class CAVMAE(nn.Module):
         x = self.decoder_norm(x)
 
         # predictor projection
-        x_a = self.decoder_pred_a(x[:, : self.patch_embed_a.num_patches, :])
+        x_a1 = self.decoder_pred_a(x[:, : self.patch_embed_a1.num_patches, :])
         x_a2 = self.decoder_pred_a(
             x[
                 :,
-                self.patch_embed_a.num_patches : self.patch_embed_a.num_patches
+                self.patch_embed_a1.num_patches : self.patch_embed_a1.num_patches
                 + self.patch_embed_a2.num_patches,
                 :,
             ]
         )
         x_v = self.decoder_pred_v(
-            x[:, self.patch_embed_a.num_patches + self.patch_embed_a2.num_patches :, :]
+            x[:, self.patch_embed_a1.num_patches + self.patch_embed_a2.num_patches :, :]
         )
 
         # return audio and video tokens
-        return x_a, x_a2, x_v
+        return x_a1, x_a2, x_v
 
     def forward_contrastive(self, audio_rep, video_rep, bidirect_contrast=False):
         # calculate nce loss for mean-visual representation and mean-audio representation
@@ -914,21 +978,30 @@ class CAVMAEFT(nn.Module):
         timm.models.vision_transformer.PatchEmbed = PatchEmbed
         timm.models.vision_transformer.Block = Block
 
-        self.patch_embed_a = PatchEmbed(img_size, patch_size, 1, embed_dim)
+        self.patch_embed_a1 = PatchEmbed(img_size, patch_size, 1, embed_dim)
+        self.patch_embed_a2 = PatchEmbed(img_size, patch_size, 1, embed_dim)
         self.patch_embed_v = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
 
-        self.patch_embed_a.num_patches = int(audio_length * 128 / 256)
+        self.patch_embed_a1.num_patches = int(audio_length * 128 / 256)
+        self.patch_embed_a2.num_patches = int(audio_length * 128 / 256)
         print(
-            "Number of Audio Patches: {:d}, Visual Patches: {:d}".format(
-                self.patch_embed_a.num_patches, self.patch_embed_v.num_patches
+            "Number of Audio Patches: {:d}, Number of MIDI Audio Patches: {:d}, Visual Patches: {:d}".format(
+                self.patch_embed_a1.num_patches,
+                self.patch_embed_a2.num_patches,
+                self.patch_embed_v.num_patches,
             )
         )
 
-        self.modality_a = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.modality_a1 = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.modality_a2 = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.modality_v = nn.Parameter(torch.zeros(1, 1, embed_dim))
 
-        self.pos_embed_a = nn.Parameter(
-            torch.zeros(1, self.patch_embed_a.num_patches, embed_dim),
+        self.pos_embed_a1 = nn.Parameter(
+            torch.zeros(1, self.patch_embed_a1.num_patches, embed_dim),
+            requires_grad=tr_pos,
+        )  # fixed sin-cos embedding
+        self.pos_embed_a2 = nn.Parameter(
+            torch.zeros(1, self.patch_embed_a2.num_patches, embed_dim),
             requires_grad=tr_pos,
         )  # fixed sin-cos embedding
         self.pos_embed_v = nn.Parameter(
@@ -936,7 +1009,20 @@ class CAVMAEFT(nn.Module):
             requires_grad=tr_pos,
         )  # fixed sin-cos embedding
 
-        self.blocks_a = nn.ModuleList(
+        self.blocks_a1 = nn.ModuleList(
+            [
+                Block(
+                    embed_dim,
+                    num_heads,
+                    mlp_ratio,
+                    qkv_bias=True,
+                    qk_scale=None,
+                    norm_layer=norm_layer,
+                )
+                for i in range(modality_specific_depth)
+            ]
+        )
+        self.blocks_a2 = nn.ModuleList(
             [
                 Block(
                     embed_dim,
@@ -976,7 +1062,8 @@ class CAVMAEFT(nn.Module):
             ]
         )
 
-        self.norm_a = norm_layer(embed_dim)
+        self.norm_a1 = norm_layer(embed_dim)
+        self.norm_a2 = norm_layer(embed_dim)
         self.norm_v = norm_layer(embed_dim)
         self.norm = norm_layer(embed_dim)
 
@@ -986,7 +1073,8 @@ class CAVMAEFT(nn.Module):
 
         self.initialize_weights()
 
-        print("Audio Positional Embedding Shape:", self.pos_embed_a.shape)
+        print("Audio Positional Embedding Shape:", self.pos_embed_a1.shape)
+        print("MIDI Audio Positional Embedding Shape:", self.pos_embed_a2.shape)
         print("Visual Positional Embedding Shape:", self.pos_embed_v.shape)
 
     def get_patch_num(self, input_shape, stride):
@@ -997,13 +1085,25 @@ class CAVMAEFT(nn.Module):
         return test_output.shape[2], test_output[3], test_output[2] * test_output[2]
 
     def initialize_weights(self):
-        pos_embed_a = get_2d_sincos_pos_embed(
-            self.pos_embed_a.shape[-1],
+        pos_embed_a1 = get_2d_sincos_pos_embed(
+            self.pos_embed_a1.shape[-1],
             8,
-            int(self.patch_embed_a.num_patches / 8),
+            int(self.patch_embed_a1.num_patches / 8),
             cls_token=False,
         )
-        self.pos_embed_a.data.copy_(torch.from_numpy(pos_embed_a).float().unsqueeze(0))
+        self.pos_embed_a1.data.copy_(
+            torch.from_numpy(pos_embed_a1).float().unsqueeze(0)
+        )
+
+        pos_embed_a2 = get_2d_sincos_pos_embed(
+            self.pos_embed_a2.shape[-1],
+            8,
+            int(self.patch_embed_a2.num_patches / 8),
+            cls_token=False,
+        )
+        self.pos_embed_a2.data.copy_(
+            torch.from_numpy(pos_embed_a2).float().unsqueeze(0)
+        )
 
         pos_embed_v = get_2d_sincos_pos_embed(
             self.pos_embed_v.shape[-1],
@@ -1013,12 +1113,15 @@ class CAVMAEFT(nn.Module):
         )
         self.pos_embed_v.data.copy_(torch.from_numpy(pos_embed_v).float().unsqueeze(0))
 
-        w = self.patch_embed_a.proj.weight.data
+        w = self.patch_embed_a1.proj.weight.data
+        torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+        w = self.patch_embed_a2.proj.weight.data
         torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
         w = self.patch_embed_v.proj.weight.data
         torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
 
-        torch.nn.init.normal_(self.modality_a, std=0.02)
+        torch.nn.init.normal_(self.modality_a1, std=0.02)
+        torch.nn.init.normal_(self.modality_a2, std=0.02)
         torch.nn.init.normal_(self.modality_v, std=0.02)
 
         self.apply(self._init_weights)
@@ -1033,24 +1136,35 @@ class CAVMAEFT(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def forward(self, a, v, mode):
+    def forward(self, a1, a2, v, mode):
         # multi-modal fine-tuning, our default method for fine-tuning
         if mode == "multimodal":
-            a = a.unsqueeze(1)
-            a = a.transpose(2, 3)
-            a = self.patch_embed_a(a)
-            a = a + self.pos_embed_a
-            a = a + self.modality_a
+            a1 = a1.unsqueeze(1)
+            a1 = a1.transpose(2, 3)
+            a1 = self.patch_embed_a1(a1)
+            a1 = a1 + self.pos_embed_a1
+            a1 = a1 + self.modality_a1
+
+            a2 = a2.unsqueeze(1)
+            a2 = a2.transpose(2, 3)
+            a2 = self.patch_embed_a2(a2)
+            a2 = a2 + self.pos_embed_a2
+            a2 = a2 + self.modality_a2
 
             v = self.patch_embed_v(v)
             v = v + self.pos_embed_v
             v = v + self.modality_v
 
-            for blk in self.blocks_a:
-                a = blk(a)
+            for blk in self.blocks_a1:
+                a1 = blk(a1)
+
+            for blk in self.blocks_a2:
+                a2 = blk(a2)
 
             for blk in self.blocks_v:
                 v = blk(v)
+            # Ben NOTE: average the two audio latent representations (maybe average is not the best choice, experiment)
+            a = (a1 + a2) / 2
 
             x = torch.cat((a, v), dim=1)
 
@@ -1064,19 +1178,32 @@ class CAVMAEFT(nn.Module):
 
         # finetune with only audio (and inference with only audio when the model is finetuned with only audio)
         elif mode == "audioonly":
-            a = a.unsqueeze(1)
-            a = a.transpose(2, 3)
-            a = self.patch_embed_a(a)
-            a = a + self.pos_embed_a
-            a = a + self.modality_a
+            a1 = a1.unsqueeze(1)
+            a1 = a1.transpose(2, 3)
+            a1 = self.patch_embed_a1(a1)
+            a1 = a1 + self.pos_embed_a1
+            a1 = a1 + self.modality_a1
 
-            for blk in self.blocks_a:
-                a = blk(a)
+            a2 = a2.unsqueeze(1)
+            a2 = a2.transpose(2, 3)
+            a2 = self.patch_embed_a2(a2)
+            a2 = a2 + self.pos_embed_a2
+            a2 = a2 + self.modality_a2
+
+            for blk in self.blocks_a1:
+                a1 = blk(a1)
+
+            for blk in self.blocks_a2:
+                a2 = blk(a2)
 
             # note here uses the 'a' normalization, it is used in both training and inference, so it is fine
             for blk in self.blocks_u:
-                a = blk(a, "a")
-            a = self.norm_a(a)
+                a1 = blk(a1, "a1")
+                a2 = blk(a2, "a2")
+            a1 = self.norm_a1(a1)
+            a2 = self.norm_a2(a2)
+            # Ben NOTE: average the two audio latent representations (maybe average is not the best choice, experiment)
+            a = (a1 + a2) / 2
             x = a.mean(dim=1)
             x = self.mlp_head(x)
             return x
@@ -1100,15 +1227,26 @@ class CAVMAEFT(nn.Module):
 
         # used in case that the model is finetuned with both modality, but in inference only audio is given
         elif mode == "missingaudioonly":
-            a = a.unsqueeze(1)
-            a = a.transpose(2, 3)
-            a = self.patch_embed_a(a)
-            a = a + self.pos_embed_a
-            a = a + self.modality_a
+            a1 = a1.unsqueeze(1)
+            a1 = a1.transpose(2, 3)
+            a1 = self.patch_embed_a1(a1)
+            a1 = a1 + self.pos_embed_a1
+            a1 = a1 + self.modality_a1
 
-            for blk in self.blocks_a:
-                a = blk(a)
+            a2 = a2.unsqueeze(1)
+            a2 = a2.transpose(2, 3)
+            a2 = self.patch_embed_a2(a2)
+            a2 = a2 + self.pos_embed_a2
+            a2 = a2 + self.modality_a2
 
+            for blk in self.blocks_a1:
+                a1 = blk(a1)
+
+            for blk in self.blocks_a2:
+                a2 = blk(a2)
+
+            # Ben NOTE: average the two audio latent representations (maybe average is not the best choice, experiment)
+            a = (a1 + a2) / 2
             # two forward passes to the block_u, one with modality-specific normalization, another with unified normalization
             u = a
             for blk in self.blocks_u:
@@ -1117,8 +1255,8 @@ class CAVMAEFT(nn.Module):
             u = u.mean(dim=1)
 
             for blk in self.blocks_u:
-                a = blk(a, "a")  # note here use modality-specific normalization
-            a = self.norm_a(a)
+                a = blk(a, "a1")  # note here use modality-specific normalization
+            a = self.norm_a1(a)
             a = a.mean(dim=1)
 
             # average the output of the two forward passes
@@ -1153,48 +1291,74 @@ class CAVMAEFT(nn.Module):
             return x
 
     # for retrieval
-    def forward_feat(self, a, v, mode="av"):
+    def forward_feat(self, a1, a2, v, mode="av"):
         # return both audio and visual
         if mode == "av":
-            a = a.unsqueeze(1)
-            a = a.transpose(2, 3)
-            a = self.patch_embed_a(a)
-            a = a + self.pos_embed_a
-            a = a + self.modality_a
+            a1 = a1.unsqueeze(1)
+            a1 = a1.transpose(2, 3)
+            a1 = self.patch_embed_a1(a1)
+            a1 = a1 + self.pos_embed_a1
+            a1 = a1 + self.modality_a1
+
+            a2 = a2.unsqueeze(1)
+            a2 = a2.transpose(2, 3)
+            a2 = self.patch_embed_a2(a2)
+            a2 = a2 + self.pos_embed_a2
+            a2 = a2 + self.modality_a2
 
             v = self.patch_embed_v(v)
             v = v + self.pos_embed_v
             v = v + self.modality_v
 
-            for blk in self.blocks_a:
-                a = blk(a)
+            for blk in self.blocks_a1:
+                a1 = blk(a1)
+
+            for blk in self.blocks_a2:
+                a2 = blk(a2)
 
             for blk in self.blocks_v:
                 v = blk(v)
 
             for blk in self.blocks_u:
-                a = blk(a, "a")
-            a = self.norm_a(a)
+                a1 = blk(a1, "a1")
+            a1 = self.norm_a1(a1)
+
+            for blk in self.blocks_u:
+                a2 = blk(a2, "a2")
+            a2 = self.norm_a2(a2)
 
             for blk in self.blocks_u:
                 v = blk(v, "v")
 
             v = self.norm_v(v)
-            return a, v
+            return a1, a2, v
 
         # return only audio
         if mode == "a":
-            a = a.unsqueeze(1)
-            a = a.transpose(2, 3)
-            a = self.patch_embed_a(a)
-            a = a + self.pos_embed_a
-            a = a + self.modality_a
+            a1 = a1.unsqueeze(1)
+            a1 = a1.transpose(2, 3)
+            a1 = self.patch_embed_a1(a1)
+            a1 = a1 + self.pos_embed_a1
+            a1 = a1 + self.modality_a1
 
-            for blk in self.blocks_a:
-                a = blk(a)
+            a2 = a2.unsqueeze(1)
+            a2 = a2.transpose(2, 3)
+            a2 = self.patch_embed_a2(a2)
+            a2 = a2 + self.pos_embed_a2
+            a2 = a2 + self.modality_a2
+
+            for blk in self.blocks_a1:
+                a1 = blk(a1)
 
             for blk in self.blocks_u:
-                a = blk(a, "a")
+                a1 = blk(a1, "a1")
 
-            a = self.norm_a(a)
-            return a
+            for blk in self.blocks_a2:
+                a2 = blk(a2)
+
+            for blk in self.blocks_u:
+                a2 = blk(a2, "a2")
+
+            a1 = self.norm_a1(a1)
+            a2 = self.norm_a2(a2)
+            return a1, a2
