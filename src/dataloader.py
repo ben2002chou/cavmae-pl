@@ -280,6 +280,7 @@ class AudiosetDataset(Dataset):
             the higher the chance that the code
             inside the if statement will run.
             """
+            # datum is data at {index}
             datum = self.data[index]
             datum = self.decode_data(datum)
             mix_sample_idx = random.randint(0, self.num_samples - 1)
@@ -295,6 +296,7 @@ class AudiosetDataset(Dataset):
             try:
                 image = self.get_image(
                     self.randselect_img(datum["video_id"], datum["video_path"]),
+                    # Ben NOTE: video_path is all the same so mix_datum["video_path"] is identical to datum["video_path"]
                     self.randselect_img(mix_datum["video_id"], datum["video_path"]),
                     mix_lambda,
                 )
