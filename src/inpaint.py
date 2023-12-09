@@ -160,11 +160,15 @@ mask_ratio_a, mask_ratio_m, mask_ratio_v = 0.75, 0.75, 0.75
 # or 'time' or 'freq' or 'tf'
 mask_mode = "unstructured"
 # the model has to be trained without pixel normalization for inpaint purpose
-model_path = "/home/ben2002chou/code/cav-mae/exp_midi/testmae02-audioset-cav-mae-balNone-lr5e-5-epoch25-bs48-normTrue-c0-p1.0-tpFalse-mr-unstructured-0.75/models/best_audio_model.pth"
-
+# cav
+model_path = "/home/ben2002chou/code/cav-mae/exp_midi/testmae02-audioset-cav-mae-balNone-lr5e-5-epoch25-bs48-normFalse-c0.01-p0.0-tpFalse-mr-unstructured-0.75/models/best_audio_model.pth"
+# # mae
+# model_path = "/home/ben2002chou/code/cav-mae/exp_midi/testmae02-audioset-cav-mae-balNone-lr5e-5-epoch25-bs48-normFalse-c0-p1.0-tpFalse-mr-unstructured-0.75/models/best_audio_model.pth"
+# # cavmae
+# model_path = "/home/ben2002chou/code/cav-mae/exp_midi/testmae02-audioset-cav-mae-balNone-lr5e-5-epoch25-bs48-normFalse-c0.01-p1.0-tpFalse-mr-unstructured-0.75/models/best_audio_model.pth"
 A_loss_a, A_loss_m, A_loss_v = [], [], []
-if os.path.exists("./sample_reconstruct") == False:
-    os.makedirs("./sample_reconstruct")
+if os.path.exists("./sample_reconstruct_midi_c_urmp") == False:
+    os.makedirs("./sample_reconstruct_midi_c_urmp")
 
 mae_mdl = models.CAVMAE(modality_specific_depth=11)
 
@@ -193,7 +197,7 @@ val_audio_conf = {
 # on vggsound, while the model is pretrained on AS-2M, so it is zero-shot.
 val_loader = torch.utils.data.DataLoader(
     dataloader.AudiosetDataset(
-        "/home/ben2002chou/code/cav-mae/data/cocochorals/cocochorals_test.json",
+        "/home/ben2002chou/code/cav-mae/data/cocochorals/urmp.json",
         label_csv="/home/ben2002chou/code/cav-mae/data/cocochorals/class_labels_indices_combined.csv",
         audio_conf=val_audio_conf,
     ),
@@ -229,7 +233,7 @@ for i, (a_input, m_input, v_input, _) in enumerate(val_loader):
     fig = plt.gcf()
     fig.set_size_inches(10, 5)
     plt.savefig(
-        "./sample_reconstruct/{:d}_{:.4f}_{:.4f}_{:.4f}.png".format(
+        "./sample_reconstruct_midi_c_urmp/{:d}_{:.4f}_{:.4f}_{:.4f}.png".format(
             i, mask_ratio_a, mask_ratio_m, mask_ratio_v
         ),
         dpi=150,
