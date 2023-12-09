@@ -1,3 +1,26 @@
+# For ODL 
+running inpainting experiments are in ./src/inpaint.py
+you would need a model pretrained weight with no norm_pix_loss
+
+For loss values for individual modalities, you would need to train the model on Audioset and Cocochorals
+All training scripts are in ./egs/audioset_midi
+Downloading datasets is not trivial. Audioset contains 2M videos and takes me 10 days to download on a supercomputer.
+Cocochorals is 4Tb, but much easier to download. 
+
+We use run_cavmae_pretrain_base.sh for our experiments
+a train_data.json, eval_data.json file and a labels.csv file will need to be prepared, and the paths in inpaint.py would need to be updated accordingly.
+
+
+
+
+
+
+
+
+
+
+
+
 # Contrastive Audio-Visual Masked Autoencoder
 - [Introduction](#introduction)
 - [Citing](#citing)
