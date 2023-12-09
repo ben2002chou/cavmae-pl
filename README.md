@@ -5,10 +5,13 @@ you would need a model pretrained weight with no norm_pix_loss
 For loss values for individual modalities, you would need to train the model on Audioset and Cocochorals
 All training scripts are in ./egs/audioset_midi
 Downloading datasets is not trivial. Audioset contains 2M videos and takes me 10 days to download on a supercomputer.
-Cocochorals is 4Tb, but much easier to download. 
+Cocochorals is 4Tb, but much easier to download. If you wish to prepare this dataset for training, here is a tool I wrote for processing both audioset and cocochorals: https://github.com/ben2002chou/audioset-processing-fix
 
 We use run_cavmae_pretrain_base.sh for our experiments
 a train_data.json, eval_data.json file and a labels.csv file will need to be prepared, and the paths in inpaint.py would need to be updated accordingly.
+
+
+
 
 
 
