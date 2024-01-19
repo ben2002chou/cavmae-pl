@@ -22,6 +22,7 @@ import models
 import numpy as np
 from traintest_cavmae_piano_roll import train
 
+
 # pretrain cav-mae model
 
 print(
@@ -90,7 +91,7 @@ parser.add_argument(
 parser.add_argument(
     "-w",
     "--num-workers",
-    default=32,
+    default=32,  # 32
     type=int,
     metavar="NW",
     help="# of workers for dataloading (default: 32)",
@@ -244,7 +245,7 @@ if args.bal == "bal":
         batch_size=args.batch_size,
         sampler=sampler,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=False,
         drop_last=True,
     )
 else:
@@ -256,7 +257,7 @@ else:
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=False,
         drop_last=True,
     )
 
@@ -267,7 +268,7 @@ val_loader = torch.utils.data.DataLoader(
     batch_size=args.batch_size,
     shuffle=False,
     num_workers=args.num_workers,
-    pin_memory=True,
+    pin_memory=False,
     drop_last=True,
 )
 
@@ -279,7 +280,7 @@ if args.data_eval != None:
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=False,
         drop_last=True,
     )
 
@@ -295,12 +296,15 @@ if args.model == "cav-mae":
     )
 else:
     raise ValueError("model not supported")
-
+# TODO: Check if we can add pretrained model without errors
 # initialized with a pretrained checkpoint (e.g., original vision-MAE checkpoint)
 if args.pretrain_path != "None":
     mdl_weight = torch.load(args.pretrain_path, map_location=torch.device("cpu"))
-    if not isinstance(audio_model, torch.nn.DataParallel):
-        audio_model = torch.nn.DataParallel(audio_model)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    audio_model = audio_model.to(device)
+    if not isinstance(audio_model, torch.nn.parallel.DistributedDataParallel):
+        audio_model = torch.nn.parallel.DistributedDataParallel(audio_model)
+    audio_model = audio_model.to(device)
     miss, unexpected = audio_model.load_state_dict(mdl_weight, strict=False)
     print("now load mae pretrained weights from ", args.pretrain_path)
     print(miss, unexpected)

@@ -19,11 +19,21 @@ from torch import nn
 import numpy as np
 import pickle
 from torch.cuda.amp import autocast, GradScaler
+from lightning.fabric import Fabric  # Importing Fabric
+from lightning.fabric.loggers import TensorBoardLogger
+
+# Pick a logger and add it to Fabric
+logger = TensorBoardLogger(root_dir="logs")
+# Initialize Fabric
+fabric = Fabric(
+    accelerator="gpu", devices=4, num_nodes=4, strategy="ddp", loggers=logger
+)
+fabric.launch()
 
 
 def train(audio_model, train_loader, test_loader, args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("running on " + str(device))
+    fabric.print("running on " + str(device))
     torch.set_grad_enabled(True)
 
     (
@@ -54,17 +64,18 @@ def train(audio_model, train_loader, test_loader, args):
         with open("%s/progress.pkl" % exp_dir, "wb") as f:
             pickle.dump(progress, f)
 
-    if not isinstance(audio_model, nn.DataParallel):
-        audio_model = nn.DataParallel(audio_model)
+    audio_model = audio_model.to(device)
+    if not isinstance(audio_model, nn.parallel.DistributedDataParallel):
+        audio_model = nn.parallel.DistributedDataParallel(audio_model)
 
     audio_model = audio_model.to(device)
     trainables = [p for p in audio_model.parameters() if p.requires_grad]
-    print(
+    fabric.print(
         "Total parameter number is : {:.3f} million".format(
             sum(p.numel() for p in audio_model.parameters()) / 1e6
         )
     )
-    print(
+    fabric.print(
         "Total trainable parameter number is : {:.3f} million".format(
             sum(p.numel() for p in trainables) / 1e6
         )
@@ -78,20 +89,20 @@ def train(audio_model, train_loader, test_loader, args):
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode="max", factor=0.5, patience=args.lr_patience, verbose=True
         )
-        print("Override to use adaptive learning rate scheduler.")
+        fabric.print("Override to use adaptive learning rate scheduler.")
     else:
         scheduler = torch.optim.lr_scheduler.MultiStepLR(
             optimizer,
             list(range(args.lrscheduler_start, 1000, args.lrscheduler_step)),
             gamma=args.lrscheduler_decay,
         )
-        print(
+        fabric.print(
             "The learning rate scheduler starts at {:d} epoch with decay rate of {:.3f} every {:d} epoches".format(
                 args.lrscheduler_start, args.lrscheduler_decay, args.lrscheduler_step
             )
         )
 
-    print(
+    fabric.print(
         "now training with {:s}, learning rate scheduler: {:s}".format(
             str(args.dataset), str(scheduler)
         )
@@ -103,25 +114,33 @@ def train(audio_model, train_loader, test_loader, args):
     epoch += 1
     scaler = GradScaler()
 
-    print("current #steps=%s, #epochs=%s" % (global_step, epoch))
-    print("start training...")
+    fabric.print("current #steps=%s, #epochs=%s" % (global_step, epoch))
+    fabric.print("start training...")
     result = np.zeros([args.n_epochs, 12])  # for each epoch, 10 metrics to record
+
+    # Setup model and optimizer with Fabric
+    audio_model, optimizer = fabric.setup(audio_model, optimizer)
+    train_loader = fabric.setup_dataloaders(train_loader)
+    test_loader = fabric.setup_dataloaders(test_loader)
+
     audio_model.train()
     while epoch < args.n_epochs + 1:
         begin_time = time.time()
         end_time = time.time()
         audio_model.train()
-        print("---------------")
-        print(datetime.datetime.now())
-        print("current #epochs=%s, #steps=%s" % (epoch, global_step))
-        print(
+        fabric.print("---------------")
+        fabric.print(datetime.datetime.now())
+        fabric.print("current #epochs=%s, #steps=%s" % (epoch, global_step))
+        fabric.print(
             "current masking ratio is {:.3f} for both modalities; audio mask mode {:s}".format(
                 args.masking_ratio, args.mask_mode
             )
         )
-
+        # fabric.print("start dataloader")
+        # fabric.print("train loader length is %s" % len(train_loader))
         for i, (a1_input, a2_input, v_input, _) in enumerate(train_loader):
             batch_size = a1_input.size(0)
+            # fabric.print("batch size is %s" % batch_size)
             a1_input = a1_input.to(device, non_blocking=True)
             a2_input = a2_input.to(device, non_blocking=True)
             v_input = v_input.to(device, non_blocking=True)
@@ -129,7 +148,7 @@ def train(audio_model, train_loader, test_loader, args):
             data_time.update(time.time() - end_time)
             per_sample_data_time.update((time.time() - end_time) / a1_input.shape[0])
             dnn_start_time = time.time()
-
+            # fabric.print("start forward")
             with autocast():
                 (
                     loss,
@@ -152,7 +171,7 @@ def train(audio_model, train_loader, test_loader, args):
                     contrast_loss_weight=args.contrast_loss_weight,
                     mask_mode=args.mask_mode,
                 )
-                # this is due to for torch.nn.DataParallel, the output loss of 4 gpus won't be automatically averaged, need to be done manually
+                # this is due to for torch.nn.DataParallel, the output loss of 4 gpus won't be automatically averaged, need to be done manually TODO: Check if this is still the case
                 loss, loss_mae, loss_mae_a1, loss_mae_a2, loss_mae_v, loss_c, c_acc = (
                     loss.sum(),
                     loss_mae.sum(),
@@ -163,8 +182,10 @@ def train(audio_model, train_loader, test_loader, args):
                     c_acc.mean(),
                 )
 
-            optimizer.zero_grad()
-            scaler.scale(loss).backward()
+            optimizer.zero_grad(set_to_none=True)
+            # scaler.scale(loss).backward()
+
+            fabric.backward(scaler.scale(loss.sum()))  # TODO: why does .sum twice work?
             scaler.step(optimizer)
             scaler.update()
 
@@ -179,6 +200,9 @@ def train(audio_model, train_loader, test_loader, args):
             per_sample_dnn_time.update(
                 (time.time() - dnn_start_time) / a1_input.shape[0]
             )
+            # TODO: Check if this is messing up the memory
+            # del a1_input, a2_input, v_input, loss
+            # torch.cuda.empty_cache()  # Use this sparingly
 
             print_step = global_step % args.n_print_steps == 0
             early_print_step = (
@@ -187,23 +211,23 @@ def train(audio_model, train_loader, test_loader, args):
             print_step = print_step or early_print_step
 
             if print_step and global_step != 0:
-                print(
+                fabric.print(
                     "Epoch: [{0}][{1}/{2}]\t"
-                    # "Per Sample Total Time {per_sample_time.avg:.5f}\t"
-                    # "Per Sample Data Time {per_sample_data_time.avg:.5f}\t"
-                    # "Per Sample DNN Time {per_sample_dnn_time.avg:.5f}\t"
+                    "Per Sample Total Time {per_sample_time.avg:.5f}\t"
+                    "Per Sample Data Time {per_sample_data_time.avg:.5f}\t"
+                    "Per Sample DNN Time {per_sample_dnn_time.avg:.5f}\t"
                     "Train Total Loss {loss_av_meter.val:.4f}\t"
                     "Train MAE Loss Audio {loss_a1_meter.val:.4f}\t"
                     "Train MAE Loss Midi Audio {loss_a2_meter.val:.4f}\t"
                     "Train MAE Loss Visual {loss_v_meter.val:.4f}\t"
                     "Train Contrastive Loss {loss_c_meter.val:.4f}\t"
-                    "Train Contrastive Acc {c_acc:.3f}\t".format(
+                    "Train Contrastive Accuracy {c_acc:.4f}\t".format(
                         epoch,
                         i,
                         len(train_loader),
-                        # per_sample_time=per_sample_time,
-                        # per_sample_data_time=per_sample_data_time,
-                        # per_sample_dnn_time=per_sample_dnn_time,
+                        per_sample_time=per_sample_time,
+                        per_sample_data_time=per_sample_data_time,
+                        per_sample_dnn_time=per_sample_dnn_time,
                         loss_av_meter=loss_av_meter,
                         loss_a1_meter=loss_a1_meter,
                         loss_a2_meter=loss_a2_meter,
@@ -213,14 +237,26 @@ def train(audio_model, train_loader, test_loader, args):
                     ),
                     flush=True,
                 )
+                # Prepare the values you want to log
+                # values = {
+                #     "Loss/Total": loss_av_meter.val,
+                #     "Loss/MAE_Audio": loss_a1_meter.val,
+                #     "Loss/MAE_Midi_Audio": loss_a2_meter.val,
+                #     "Loss/MAE_Visual": loss_v_meter.val,
+                #     "Loss/Contrastive": loss_c_meter.val,
+                #     "Accuracy/Contrastive": c_acc,
+                # }
+
+                # # Log the values using fabric.log_dict
+                # fabric.log_dict(values)
                 if np.isnan(loss_av_meter.avg):
-                    print("training diverged...")
+                    fabric.print("training diverged...")
                     return
 
             end_time = time.time()
             global_step += 1
 
-        print("start validation")
+        fabric.print("start validation")
         (
             eval_loss_av,
             eval_loss_mae,
@@ -231,19 +267,19 @@ def train(audio_model, train_loader, test_loader, args):
             eval_c_acc,
         ) = validate(audio_model, test_loader, args)
 
-        print("Eval Audio MAE Loss: {:.6f}".format(eval_loss_mae_a1))
-        print("Eval MIDI Audio MAE Loss: {:.6f}".format(eval_loss_mae_a2))
-        print("Eval Visual MAE Loss: {:.6f}".format(eval_loss_mae_v))
-        print("Eval Total MAE Loss: {:.6f}".format(eval_loss_mae))
-        print("Eval Contrastive Loss: {:.6f}".format(eval_loss_c))
-        print("Eval Total Loss: {:.6f}".format(eval_loss_av))
-        print("Eval Contrastive Accuracy: {:.6f}".format(eval_c_acc))
+        fabric.print("Eval Audio MAE Loss: {:.6f}".format(eval_loss_mae_a1))
+        fabric.print("Eval MIDI Audio MAE Loss: {:.6f}".format(eval_loss_mae_a2))
+        fabric.print("Eval Visual MAE Loss: {:.6f}".format(eval_loss_mae_v))
+        fabric.print("Eval Total MAE Loss: {:.6f}".format(eval_loss_mae))
+        fabric.print("Eval Contrastive Loss: {:.6f}".format(eval_loss_c))
+        fabric.print("Eval Total Loss: {:.6f}".format(eval_loss_av))
+        fabric.print("Eval Contrastive Accuracy: {:.6f}".format(eval_c_acc))
 
-        print("Train Audio MAE Loss: {:.6f}".format(loss_a1_meter.avg))
-        print("Train MIDI Audio MAE Loss: {:.6f}".format(loss_a2_meter.avg))
-        print("Train Visual MAE Loss: {:.6f}".format(loss_v_meter.avg))
-        print("Train Contrastive Loss: {:.6f}".format(loss_c_meter.avg))
-        print("Train Total Loss: {:.6f}".format(loss_av_meter.avg))
+        fabric.print("Train Audio MAE Loss: {:.6f}".format(loss_a1_meter.avg))
+        fabric.print("Train MIDI Audio MAE Loss: {:.6f}".format(loss_a2_meter.avg))
+        fabric.print("Train Visual MAE Loss: {:.6f}".format(loss_v_meter.avg))
+        fabric.print("Train Contrastive Loss: {:.6f}".format(loss_c_meter.avg))
+        fabric.print("Train Total Loss: {:.6f}".format(loss_av_meter.avg))
 
         # train audio mae loss, train visual mae loss, train contrastive loss, train total loss
         # eval audio mae loss, eval visual mae loss, eval contrastive loss, eval total loss, eval contrastive accuracy, lr
@@ -262,7 +298,7 @@ def train(audio_model, train_loader, test_loader, args):
             optimizer.param_groups[0]["lr"],
         ]
         np.savetxt(exp_dir + "/result.csv", result, delimiter=",")
-        print("validation finished")
+        fabric.print("validation finished")
 
         if eval_loss_av < best_loss:
             best_loss = eval_loss_av
@@ -287,12 +323,12 @@ def train(audio_model, train_loader, test_loader, args):
         else:
             scheduler.step()
 
-        print("Epoch-{0} lr: {1}".format(epoch, optimizer.param_groups[0]["lr"]))
+        fabric.print("Epoch-{0} lr: {1}".format(epoch, optimizer.param_groups[0]["lr"]))
 
         _save_progress()
 
         finish_time = time.time()
-        print(
+        fabric.print(
             "epoch {:d} training time: {:.3f}".format(epoch, finish_time - begin_time)
         )
 
@@ -313,9 +349,14 @@ def train(audio_model, train_loader, test_loader, args):
 def validate(audio_model, val_loader, args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_time = AverageMeter()
-    if not isinstance(audio_model, nn.DataParallel):
-        audio_model = nn.DataParallel(audio_model)
     audio_model = audio_model.to(device)
+    if not isinstance(audio_model, nn.parallel.DistributedDataParallel):
+        audio_model = nn.parallel.DistributedDataParallel(audio_model)
+    audio_model = audio_model.to(device)
+
+    audio_model = fabric.setup(audio_model)  # Setup model for validation
+    # val_loader = fabric.setup_dataloaders(val_loader)
+
     audio_model.eval()
 
     end = time.time()
@@ -363,6 +404,7 @@ def validate(audio_model, val_loader, args):
                     contrast_loss_weight=args.contrast_loss_weight,
                     mask_mode=args.mask_mode,
                 )
+
                 loss, loss_mae, loss_mae_a1, loss_mae_a2, loss_mae_v, loss_c, c_acc = (
                     loss.sum(),
                     loss_mae.sum(),
@@ -372,6 +414,7 @@ def validate(audio_model, val_loader, args):
                     loss_c.sum(),
                     c_acc.mean(),
                 )
+
             A_loss.append(loss.to("cpu").detach())
             A_loss_mae.append(loss_mae.to("cpu").detach())
             A_loss_mae_a1.append(loss_mae_a1.to("cpu").detach())

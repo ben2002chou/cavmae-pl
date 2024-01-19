@@ -44,7 +44,6 @@ class Block(nn.Module):
         num_heads,
         mlp_ratio=4.0,
         qkv_bias=False,
-        qk_scale=None,
         drop=0.0,
         attn_drop=0.0,
         drop_path=0.0,
@@ -60,7 +59,6 @@ class Block(nn.Module):
             dim,
             num_heads=num_heads,
             qkv_bias=qkv_bias,
-            qk_scale=qk_scale,
             attn_drop=attn_drop,
             proj_drop=drop,
         )
@@ -166,7 +164,6 @@ class CAVMAE(nn.Module):
                     num_heads,
                     mlp_ratio,
                     qkv_bias=True,
-                    qk_scale=None,
                     norm_layer=norm_layer,
                 )
                 for i in range(modality_specific_depth)
@@ -180,7 +177,6 @@ class CAVMAE(nn.Module):
                     num_heads,
                     mlp_ratio,
                     qkv_bias=True,
-                    qk_scale=None,
                     norm_layer=norm_layer,
                 )
                 for i in range(modality_specific_depth)
@@ -194,7 +190,6 @@ class CAVMAE(nn.Module):
                     num_heads,
                     mlp_ratio,
                     qkv_bias=True,
-                    qk_scale=None,
                     norm_layer=norm_layer,
                 )
                 for i in range(modality_specific_depth)
@@ -208,7 +203,6 @@ class CAVMAE(nn.Module):
                     num_heads,
                     mlp_ratio,
                     qkv_bias=True,
-                    qk_scale=None,
                     norm_layer=norm_layer,
                 )
                 for i in range(12 - modality_specific_depth)
@@ -254,7 +248,6 @@ class CAVMAE(nn.Module):
                     decoder_num_heads,
                     mlp_ratio,
                     qkv_bias=True,
-                    qk_scale=None,
                     norm_layer=norm_layer,
                 )
                 for i in range(decoder_depth)
@@ -783,8 +776,8 @@ class CAVMAE(nn.Module):
         # TODO: Make this more robust. Zero Loss may cause sharp loss landscape
         # Check if tensors are empty after applying the mask
         if input.nelement() == 0 or pred.nelement() == 0 or mask.nelement() == 0:
-            # Return a default value, e.g., zero loss
-            return torch.tensor(0.0, device=input.device)
+            # Return a default value, e.g.,zero batch size, zero loss
+            return 0, torch.tensor(0.0, device=input.device)
 
         if modality == "a1":
             # for audio, need to adjust the shape
@@ -824,11 +817,11 @@ class CAVMAE(nn.Module):
             target = (target - mean) / (var + 1.0e-6) ** 0.5
 
         loss = (pred - target) ** 2
-
         loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
-
+        batch_size = loss.shape[0]  # batch size
         loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
-        return loss
+
+        return batch_size, loss
 
     def forward(
         self,
@@ -857,6 +850,10 @@ class CAVMAE(nn.Module):
         valid_samples_mask_imgs = [
             not torch.all(torch.abs(img - 0.01) < tolerance) for img in imgs
         ]
+        # valid_samples_mask_audio1 = ~(audio1 == 0).all(dim=1).all(dim=1)
+        # valid_samples_mask_audio2 = ~(audio2 == 0).all(dim=1).all(dim=1)
+        # valid_samples_mask_imgs = ~(imgs == 0).all(dim=1).all(dim=1).all(dim=1)
+
         # print(valid_samples_mask_imgs)
 
         # Convert lists to tensors
@@ -903,16 +900,22 @@ class CAVMAE(nn.Module):
                 mask_v,
                 ids_restore_v,
             )
-            loss_mae_a1 = self.forward_mae_loss(
+            bs_a1, loss_mae_a1 = self.forward_mae_loss(
                 audio1, pred_a1, mask_a1, "a1", valid_samples_mask_audio1
             )
-            loss_mae_a2 = self.forward_mae_loss(
+            bs_a2, loss_mae_a2 = self.forward_mae_loss(
                 audio2, pred_a2, mask_a2, "a2", valid_samples_mask_audio2
             )
-            loss_mae_v = self.forward_mae_loss(
+            bs_v, loss_mae_v = self.forward_mae_loss(
                 imgs, pred_v, mask_v, "v", valid_samples_mask_imgs
             )
-            loss_mae = mae_loss_weight * (loss_mae_a1 + loss_mae_a2 + loss_mae_v)
+            batch_size = bs_a1 + bs_a2 + bs_v
+            loss_mae = (
+                3
+                * mae_loss_weight
+                * (loss_mae_a1 * bs_a1 + loss_mae_a2 * bs_a2 + loss_mae_v * bs_v)
+                / (batch_size)
+            )
         else:
             loss_mae_a1, loss_mae_a2, loss_mae_v, loss_mae = (
                 torch.tensor(0.0, device=audio1.device),
@@ -946,6 +949,10 @@ class CAVMAE(nn.Module):
             )
 
         loss = loss_mae + loss_c
+        all_params = torch.sum(torch.stack([torch.sum(p) for p in self.parameters()]))
+        loss = loss + 0 * all_params
+        # all_params = sum(p.sum() for p in self.parameters())
+        # loss = loss + 0 * all_params
 
         return (
             loss,
@@ -1121,7 +1128,6 @@ class CAVMAEFT(nn.Module):
                     num_heads,
                     mlp_ratio,
                     qkv_bias=True,
-                    qk_scale=None,
                     norm_layer=norm_layer,
                 )
                 for i in range(modality_specific_depth)
@@ -1134,7 +1140,6 @@ class CAVMAEFT(nn.Module):
                     num_heads,
                     mlp_ratio,
                     qkv_bias=True,
-                    qk_scale=None,
                     norm_layer=norm_layer,
                 )
                 for i in range(modality_specific_depth)
@@ -1147,7 +1152,6 @@ class CAVMAEFT(nn.Module):
                     num_heads,
                     mlp_ratio,
                     qkv_bias=True,
-                    qk_scale=None,
                     norm_layer=norm_layer,
                 )
                 for i in range(modality_specific_depth)
@@ -1160,7 +1164,6 @@ class CAVMAEFT(nn.Module):
                     num_heads,
                     mlp_ratio,
                     qkv_bias=True,
-                    qk_scale=None,
                     norm_layer=norm_layer,
                 )
                 for i in range(12 - modality_specific_depth)

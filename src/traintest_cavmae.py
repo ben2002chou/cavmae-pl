@@ -19,6 +19,12 @@ from torch import nn
 import numpy as np
 import pickle
 from torch.cuda.amp import autocast, GradScaler
+from lightning.fabric import Fabric  # Importing Fabric
+
+
+# Initialize Fabric
+fabric = Fabric(accelerator="gpu", devices=4, num_nodes=2, strategy="ddp")
+fabric.launch()
 
 
 def train(audio_model, train_loader, test_loader, args):
@@ -53,18 +59,19 @@ def train(audio_model, train_loader, test_loader, args):
         with open("%s/progress.pkl" % exp_dir, "wb") as f:
             pickle.dump(progress, f)
 
-    if not isinstance(audio_model, nn.DataParallel):
-        audio_model = nn.DataParallel(audio_model)
+    audio_model = audio_model.to(device)
+    if not isinstance(audio_model, nn.parallel.DistributedDataParallel):
+        audio_model = nn.parallel.DistributedDataParallel(audio_model)
 
     audio_model = audio_model.to(device)
     trainables = [p for p in audio_model.parameters() if p.requires_grad]
     print(
-        "Total parameter number is : {:.3f} million".format(
+        "Total parameter number is : {:.12f} million".format(
             sum(p.numel() for p in audio_model.parameters()) / 1e6
         )
     )
     print(
-        "Total trainable parameter number is : {:.3f} million".format(
+        "Total trainable parameter number is : {:.12f} million".format(
             sum(p.numel() for p in trainables) / 1e6
         )
     )
@@ -104,7 +111,13 @@ def train(audio_model, train_loader, test_loader, args):
 
     print("current #steps=%s, #epochs=%s" % (global_step, epoch))
     print("start training...")
-    result = np.zeros([args.n_epochs, 10])  # for each epoch, 10 metrics to record
+    result = np.zeros([args.n_epochs, 6])  # for each epoch, 10 metrics to record
+
+    # Setup model and optimizer with Fabric
+    audio_model, optimizer = fabric.setup(audio_model, optimizer)
+    train_loader = fabric.setup_dataloaders(train_loader)
+    test_loader = fabric.setup_dataloaders(test_loader)
+
     audio_model.train()
     while epoch < args.n_epochs + 1:
         begin_time = time.time()
@@ -130,14 +143,15 @@ def train(audio_model, train_loader, test_loader, args):
 
             with autocast():
                 (
-                    loss,
-                    loss_mae,
-                    loss_mae_a,
-                    loss_mae_v,
-                    loss_c,
-                    mask_a,
-                    mask_v,
-                    c_acc,
+                    loss
+                    # ,
+                    # loss_mae,
+                    # loss_mae_a,
+                    # loss_mae_v,
+                    # loss_c,
+                    # mask_a,
+                    # mask_v,
+                    # c_acc,
                 ) = audio_model(
                     a_input,
                     v_input,
@@ -148,25 +162,26 @@ def train(audio_model, train_loader, test_loader, args):
                     mask_mode=args.mask_mode,
                 )
                 # this is due to for torch.nn.DataParallel, the output loss of 4 gpus won't be automatically averaged, need to be done manually
-                loss, loss_mae, loss_mae_a, loss_mae_v, loss_c, c_acc = (
-                    loss.sum(),
-                    loss_mae.sum(),
-                    loss_mae_a.sum(),
-                    loss_mae_v.sum(),
-                    loss_c.sum(),
-                    c_acc.mean(),
-                )
+                # loss, loss_mae, loss_mae_a, loss_mae_v, loss_c, c_acc = (
+                #     loss.sum(),
+                #     loss_mae.sum(),
+                #     loss_mae_a.sum(),
+                #     loss_mae_v.sum(),
+                #     loss_c.sum(),
+                #     c_acc.mean(),
+                # )
+                loss = loss.sum()
 
             optimizer.zero_grad()
-            scaler.scale(loss).backward()
+            fabric.backward(scaler.scale(loss.sum()))
             scaler.step(optimizer)
             scaler.update()
 
             # loss_av is the main loss
             loss_av_meter.update(loss.item(), batch_size)
-            loss_a_meter.update(loss_mae_a.item(), batch_size)
-            loss_v_meter.update(loss_mae_v.item(), batch_size)
-            loss_c_meter.update(loss_c.item(), batch_size)
+            # loss_a_meter.update(loss_mae_a.item(), batch_size)
+            # loss_v_meter.update(loss_mae_v.item(), batch_size)
+            # loss_c_meter.update(loss_c.item(), batch_size)
             batch_time.update(time.time() - end_time)
             per_sample_time.update((time.time() - end_time) / a_input.shape[0])
             per_sample_dnn_time.update(
@@ -188,8 +203,7 @@ def train(audio_model, train_loader, test_loader, args):
                     "Train Total Loss {loss_av_meter.val:.4f}\t"
                     "Train MAE Loss Audio {loss_a_meter.val:.4f}\t"
                     "Train MAE Loss Visual {loss_v_meter.val:.4f}\t"
-                    "Train Contrastive Loss {loss_c_meter.val:.4f}\t"
-                    "Train Contrastive Acc {c_acc:.3f}\t".format(
+                    "Train Contrastive Loss {loss_c_meter.val:.4f}\t".format(
                         epoch,
                         i,
                         len(train_loader),
@@ -200,7 +214,7 @@ def train(audio_model, train_loader, test_loader, args):
                         loss_a_meter=loss_a_meter,
                         loss_v_meter=loss_v_meter,
                         loss_c_meter=loss_c_meter,
-                        c_acc=c_acc,
+                        # c_acc=c_acc,
                     ),
                     flush=True,
                 )
@@ -213,20 +227,20 @@ def train(audio_model, train_loader, test_loader, args):
 
         print("start validation")
         (
-            eval_loss_av,
-            eval_loss_mae,
-            eval_loss_mae_a,
-            eval_loss_mae_v,
-            eval_loss_c,
-            eval_c_acc,
+            eval_loss_av  # ,
+            # eval_loss_mae,
+            # eval_loss_mae_a,
+            # eval_loss_mae_v,
+            # eval_loss_c,
+            # eval_c_acc,
         ) = validate(audio_model, test_loader, args)
 
-        print("Eval Audio MAE Loss: {:.6f}".format(eval_loss_mae_a))
-        print("Eval Visual MAE Loss: {:.6f}".format(eval_loss_mae_v))
-        print("Eval Total MAE Loss: {:.6f}".format(eval_loss_mae))
-        print("Eval Contrastive Loss: {:.6f}".format(eval_loss_c))
+        # print("Eval Audio MAE Loss: {:.6f}".format(eval_loss_mae_a))
+        # print("Eval Visual MAE Loss: {:.6f}".format(eval_loss_mae_v))
+        # print("Eval Total MAE Loss: {:.6f}".format(eval_loss_mae))
+        # print("Eval Contrastive Loss: {:.6f}".format(eval_loss_c))
         print("Eval Total Loss: {:.6f}".format(eval_loss_av))
-        print("Eval Contrastive Accuracy: {:.6f}".format(eval_c_acc))
+        # print("Eval Contrastive Accuracy: {:.6f}".format(eval_c_acc))
 
         print("Train Audio MAE Loss: {:.6f}".format(loss_a_meter.avg))
         print("Train Visual MAE Loss: {:.6f}".format(loss_v_meter.avg))
@@ -240,11 +254,11 @@ def train(audio_model, train_loader, test_loader, args):
             loss_v_meter.avg,
             loss_c_meter.avg,
             loss_av_meter.avg,
-            eval_loss_mae_a,
-            eval_loss_mae_v,
-            eval_loss_c,
+            # eval_loss_mae_a,
+            # eval_loss_mae_v,
+            # eval_loss_c,
             eval_loss_av,
-            eval_c_acc,
+            # eval_c_acc,
             optimizer.param_groups[0]["lr"],
         ]
         np.savetxt(exp_dir + "/result.csv", result, delimiter=",")
@@ -298,9 +312,14 @@ def train(audio_model, train_loader, test_loader, args):
 def validate(audio_model, val_loader, args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_time = AverageMeter()
-    if not isinstance(audio_model, nn.DataParallel):
-        audio_model = nn.DataParallel(audio_model)
     audio_model = audio_model.to(device)
+    if not isinstance(audio_model, nn.parallel.DistributedDataParallel):
+        audio_model = nn.parallel.DistributedDataParallel(audio_model)
+    audio_model = audio_model.to(device)
+
+    audio_model = fabric.setup(audio_model)  # Setup model for validation
+    # val_loader = fabric.setup_dataloaders(val_loader) (test loader is already setup)
+
     audio_model.eval()
 
     end = time.time()
@@ -318,14 +337,15 @@ def validate(audio_model, val_loader, args):
             v_input = v_input.to(device)
             with autocast():
                 (
-                    loss,
-                    loss_mae,
-                    loss_mae_a,
-                    loss_mae_v,
-                    loss_c,
-                    mask_a,
-                    mask_v,
-                    c_acc,
+                    loss
+                    # loss,
+                    # loss_mae,
+                    # loss_mae_a,
+                    # loss_mae_v,
+                    # loss_c,
+                    # mask_a,
+                    # mask_v,
+                    # c_acc,
                 ) = audio_model(
                     a_input,
                     v_input,
@@ -335,28 +355,29 @@ def validate(audio_model, val_loader, args):
                     contrast_loss_weight=args.contrast_loss_weight,
                     mask_mode=args.mask_mode,
                 )
-                loss, loss_mae, loss_mae_a, loss_mae_v, loss_c, c_acc = (
-                    loss.sum(),
-                    loss_mae.sum(),
-                    loss_mae_a.sum(),
-                    loss_mae_v.sum(),
-                    loss_c.sum(),
-                    c_acc.mean(),
-                )
+                # loss, loss_mae, loss_mae_a, loss_mae_v, loss_c, c_acc = (
+                #     loss.sum(),
+                #     loss_mae.sum(),
+                #     loss_mae_a.sum(),
+                #     loss_mae_v.sum(),
+                #     loss_c.sum(),
+                #     c_acc.mean(),
+                # )
+                loss = loss.sum()
             A_loss.append(loss.to("cpu").detach())
-            A_loss_mae.append(loss_mae.to("cpu").detach())
-            A_loss_mae_a.append(loss_mae_a.to("cpu").detach())
-            A_loss_mae_v.append(loss_mae_v.to("cpu").detach())
-            A_loss_c.append(loss_c.to("cpu").detach())
-            A_c_acc.append(c_acc.to("cpu").detach())
+            # A_loss_mae.append(loss_mae.to("cpu").detach())
+            # A_loss_mae_a.append(loss_mae_a.to("cpu").detach())
+            # A_loss_mae_v.append(loss_mae_v.to("cpu").detach())
+            # A_loss_c.append(loss_c.to("cpu").detach())
+            # A_c_acc.append(c_acc.to("cpu").detach())
             batch_time.update(time.time() - end)
             end = time.time()
 
         loss = np.mean(A_loss)
-        loss_mae = np.mean(A_loss_mae)
-        loss_mae_a = np.mean(A_loss_mae_a)
-        loss_mae_v = np.mean(A_loss_mae_v)
-        loss_c = np.mean(A_loss_c)
-        c_acc = np.mean(A_c_acc)
+        # loss_mae = np.mean(A_loss_mae)
+        # loss_mae_a = np.mean(A_loss_mae_a)
+        # loss_mae_v = np.mean(A_loss_mae_v)
+        # loss_c = np.mean(A_loss_c)
+        # c_acc = np.mean(A_c_acc)
 
-    return loss, loss_mae, loss_mae_a, loss_mae_v, loss_c, c_acc
+    return loss  # , loss_mae, loss_mae_a, loss_mae_v, loss_c, c_acc
